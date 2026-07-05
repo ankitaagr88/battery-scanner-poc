@@ -61,6 +61,9 @@
     <option>UPS</option>
   </select>
 
+  <label for="capacity">Capacity</label>
+  <input type="text" id="capacity" placeholder="e.g. 35Ah" />
+
   <label for="purchaseDate">Purchase Date</label>
   <input type="date" id="purchaseDate" />
 
@@ -316,7 +319,7 @@ function jsonpAddEntry(item) {
 
     const params = new URLSearchParams({
       action: 'addEntry', serial: item.serial, brand: item.brand, type: item.type,
-      purchaseDate: item.purchaseDate, token: item.token, callback: callbackName
+      capacity: item.capacity, purchaseDate: item.purchaseDate, token: item.token, callback: callbackName
     });
     const script = document.createElement('script');
     script.onerror = () => {
@@ -351,6 +354,7 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
   const serial = document.getElementById('serial').value.trim();
   const brand = document.getElementById('brand').value;
   const type = document.getElementById('type').value;
+  const capacity = document.getElementById('capacity').value.trim();
   const purchaseDate = document.getElementById('purchaseDate').value;
   const photoFile = document.getElementById('photo').files[0];
 
@@ -370,7 +374,7 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
     photoMimeType = photoFile.type;
   }
 
-  const item = { serial, brand, type, purchaseDate, token: sessionToken, staffName: sessionStaffName, photoBase64, photoMimeType };
+  const item = { serial, brand, type, capacity, purchaseDate, token: sessionToken, staffName: sessionStaffName, photoBase64, photoMimeType };
 
   try {
     const response = await jsonpAddEntry(item);
@@ -382,7 +386,7 @@ document.getElementById('submitBtn').addEventListener('click', async () => {
           showStatus('Entry + photo saved.', false);
         } else {
           // Text entry succeeded but photo didn't — queue just the photo step for retry.
-          await queueAdd({ serial, brand: '', type: '', purchaseDate: '', token: sessionToken, staffName: sessionStaffName, photoBase64, photoMimeType, photoOnly: true });
+          await queueAdd({ serial, brand: '', type: '', capacity: '', purchaseDate: '', token: sessionToken, staffName: sessionStaffName, photoBase64, photoMimeType, photoOnly: true });
           showStatus('Entry saved. Photo upload is weak right now — it will retry automatically.', true);
           updatePendingBanner();
         }
