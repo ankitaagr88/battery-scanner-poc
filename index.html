@@ -223,7 +223,7 @@
       <h2 style="color: var(--navy);">Scan Battery Serial</h2>
 
       <label>Camera Scan (optional)</label>
-      <video id="preview" muted playsinline></video>
+      <video id="preview" autoplay muted playsinline></video>
       <button id="scanBtn" type="button">📱 Start Camera Scan</button>
       <div class="hint">Point at the serial number label or barcode. Not working? Enter it manually below.</div>
 
@@ -441,6 +441,9 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
       video: { facingMode: 'environment' }
     });
     video.srcObject = cameraStream;
+    // Some mobile browsers don't reliably honor the `autoplay` attribute
+    // once srcObject is set via JS — kick off playback explicitly too.
+    video.play().catch(() => {});
 
     // Check if BarcodeDetector is available
     if (!('BarcodeDetector' in window)) {
