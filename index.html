@@ -1,98 +1,571 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Battery Scanner POC</title>
-<style>
-  body { font-family: -apple-system, Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 16px; }
-  h1 { font-size: 20px; color: #1F4E79; }
-  video { width: 100%; border-radius: 8px; background: #000; }
-  label { display: block; margin-top: 14px; font-weight: bold; font-size: 14px; }
-  input, select { width: 100%; padding: 8px; margin-top: 4px; font-size: 16px; box-sizing: border-box; }
-  button { width: 100%; padding: 12px; margin-top: 16px; font-size: 16px; background: #1F4E79; color: white; border: none; border-radius: 6px; }
-  #status { margin-top: 12px; padding: 10px; border-radius: 6px; font-size: 14px; display: none; }
-  .ok { background: #D6F0D6; color: #1F5C1F; display: block !important; }
-  .err { background: #F0D6D6; color: #5C1F1F; display: block !important; }
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Battery Scan & Register</title>
+  <style>
+    :root {
+      --navy: #1F4E79;
+      --light-blue: #D6E4F0;
+      --dark-gray: #333;
+      --error-bg: #F0D6D6;
+      --error-text: #5C1F1F;
+      --success-bg: #D6F0D6;
+      --success-text: #1F5C1F;
+      --warning-bg: #FFF3CD;
+      --warning-text: #664D03;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; padding: 0; background: #fafafa; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: var(--dark-gray);
+    }
+
+    /* Layout: max 480px for mobile readability, centered on desktop */
+    #app { max-width: 480px; margin: 0 auto; height: 100%; display: flex; flex-direction: column; }
+
+    header {
+      background: var(--navy);
+      color: white;
+      padding: 16px;
+      text-align: center;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    header h1 { margin: 0; font-size: 20px; }
+    header p { margin: 4px 0 0; font-size: 13px; opacity: 0.9; }
+
+    main { flex: 1; overflow-y: auto; padding: 16px; }
+    footer { padding: 12px 16px; border-top: 1px solid #ddd; background: white; }
+
+    /* Login Screen */
+    .login-form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 20px;
+    }
+    label {
+      display: block;
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 4px;
+      color: var(--navy);
+    }
+    input[type="text"],
+    input[type="password"],
+    input[type="date"],
+    input[type="file"],
+    select {
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-family: inherit;
+    }
+    input:focus,
+    select:focus { outline: none; border-color: var(--navy); box-shadow: 0 0 0 2px rgba(31, 78, 121, 0.1); }
+
+    button {
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      background: var(--navy);
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:active { opacity: 0.9; }
+
+    /* Mode button styling */
+    .mode-btn {
+      width: auto;
+      padding: 8px !important;
+      font-size: 13px !important;
+      background: rgba(255,255,255,0.3) !important;
+      border: 1px solid white !important;
+      color: white;
+      border-radius: 4px;
+    }
+    .mode-btn.active {
+      background: rgba(255,255,255,0.8) !important;
+      color: var(--navy) !important;
+      font-weight: 700;
+    }
+
+    /* Status Messages */
+    #status {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 4px;
+      font-size: 14px;
+      display: none;
+      line-height: 1.4;
+    }
+    #status.ok { background: var(--success-bg); color: var(--success-text); display: block; }
+    #status.err { background: var(--error-bg); color: var(--error-text); display: block; }
+    #status.warn { background: var(--warning-bg); color: var(--warning-text); display: block; }
+
+    /* Login Screen */
+    #loginScreen { display: none; }
+    #loginScreen.active { display: block; }
+
+    /* Entry Screen */
+    #entryScreen { display: none; }
+    #entryScreen.active { display: block; }
+
+    /* Claims Screen */
+    #claimsScreen { display: none; }
+    #claimsScreen.active { display: block; }
+
+    /* Session info bar */
+    .session-info {
+      font-size: 13px;
+      color: #666;
+      margin-bottom: 16px;
+      padding: 8px 12px;
+      background: #f0f0f0;
+      border-radius: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .session-info a {
+      color: var(--navy);
+      text-decoration: none;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* Camera preview */
+    #preview {
+      width: 100%;
+      border-radius: 4px;
+      background: #000;
+      margin: 12px 0;
+      max-height: 300px;
+      object-fit: cover;
+    }
+
+    /* Pending queue banner */
+    #pendingBanner {
+      display: none;
+      margin-top: 16px;
+      padding: 12px;
+      background: var(--warning-bg);
+      border-radius: 4px;
+      border-left: 4px solid #ff9800;
+    }
+    #pendingBanner.show { display: block; }
+    #pendingBanner #pendingCount {
+      display: block;
+      font-size: 14px;
+      color: var(--warning-text);
+      margin-bottom: 8px;
+    }
+    #retryBtn {
+      background: #FF9800;
+      font-size: 14px;
+      padding: 8px 12px;
+    }
+
+    /* Helper text */
+    .hint { font-size: 12px; color: #999; margin-top: 4px; }
+  </style>
 </head>
+
 <body>
+<div id="app">
+  <header>
+    <h1 id="headerTitle">📷 Battery Registration</h1>
+    <p id="headerSubtitle">Scan, capture, and register a new battery</p>
+    <div style="margin-top: 12px; display: flex; gap: 8px; justify-content: center;">
+      <button id="modeRegister" class="mode-btn active" style="flex: 1; padding: 8px; font-size: 13px; background: rgba(255,255,255,0.3); border: 1px solid white;">📱 Register</button>
+      <button id="modeClaim" class="mode-btn" style="flex: 1; padding: 8px; font-size: 13px; background: rgba(255,255,255,0.3); border: 1px solid white;">📋 File Claim</button>
+    </div>
+  </header>
 
-<h1>Battery Entry — Feasibility POC</h1>
+  <main>
+    <!-- LOGIN SCREEN -->
+    <div id="loginScreen" class="active">
+      <h2 style="color: var(--navy);">Staff Login</h2>
+      <form class="login-form" onsubmit="handleLogin(event)">
+        <div>
+          <label for="staffName">Your Name</label>
+          <input type="text" id="staffName" placeholder="e.g., Ramesh" required />
+        </div>
 
-<!-- CONFIG: replace with your Apps Script Web App deployment URL -->
-<script>
-  const APPS_SCRIPT_URL = "PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
-</script>
+        <div>
+          <label for="staffPin">PIN</label>
+          <input type="password" id="staffPin" inputmode="numeric" placeholder="4-digit PIN" required />
+          <div class="hint">Ask your manager for your PIN</div>
+        </div>
 
-<!-- Login screen — shown until staff successfully signs in -->
-<div id="loginScreen">
-  <label for="staffName">Your Name</label>
-  <input type="text" id="staffName" placeholder="e.g. Ramesh" />
+        <button type="submit">Log In</button>
+      </form>
 
-  <label for="staffPin">PIN</label>
-  <input type="password" id="staffPin" inputmode="numeric" placeholder="4-digit PIN" />
+      <div id="status"></div>
+    </div>
 
-  <button id="loginBtn" type="button">Log In</button>
+    <!-- ENTRY SCREEN -->
+    <div id="entryScreen">
+      <div class="session-info">
+        <span>👤 <strong id="loggedInName"></strong></span>
+        <a href="#" onclick="handleLogout(event)">Log out</a>
+      </div>
+
+      <h2 style="color: var(--navy);">Scan Battery Serial</h2>
+
+      <label>Camera Scan (optional)</label>
+      <video id="preview" muted playsinline></video>
+      <button id="scanBtn" type="button">📱 Start Camera Scan</button>
+      <div class="hint">Point at the serial number label or barcode. Not working? Enter it manually below.</div>
+
+      <div style="margin-top: 20px; padding: 12px; background: #f9f9f9; border-radius: 4px; border-left: 4px solid var(--light-blue);">
+        <form id="entryForm" onsubmit="handleSubmit(event)">
+          <label for="serial">Serial Number *</label>
+          <input type="text" id="serial" placeholder="e.g., BD12345" required />
+          <div class="hint">Required. Scanned or manually entered.</div>
+
+          <label for="brand" style="margin-top: 14px;">Brand</label>
+          <select id="brand">
+            <option value="">-- Select --</option>
+            <option>Exide</option>
+            <option>Amara Raja</option>
+            <option>Luminous</option>
+            <option>Easterlies</option>
+            <option>SF</option>
+            <option>Other</option>
+          </select>
+
+          <label for="type" style="margin-top: 14px;">Battery Type</label>
+          <select id="type">
+            <option value="">-- Select --</option>
+            <option>Automotive</option>
+            <option>Inverter</option>
+            <option>UPS</option>
+            <option>Solar</option>
+            <option>Other</option>
+          </select>
+
+          <label for="purchaseDate" style="margin-top: 14px;">Purchase Date</label>
+          <input type="date" id="purchaseDate" />
+          <div class="hint">Used to calculate warranty end date.</div>
+
+          <label for="photo" style="margin-top: 14px;">Photo (optional)</label>
+          <input type="file" id="photo" accept="image/*" capture="environment" />
+          <div class="hint">Serial number label + bill, for warranty records.</div>
+
+          <button type="submit" style="margin-top: 20px;">✓ Submit Entry</button>
+        </form>
+      </div>
+
+      <!-- Pending queue banner (shown when offline queue has items) -->
+      <div id="pendingBanner">
+        <div id="pendingCount"></div>
+        <button id="retryBtn" type="button">🔄 Try Uploading Now</button>
+      </div>
+
+      <div id="status"></div>
+    </div>
+
+    <!-- CLAIMS SCREEN -->
+    <div id="claimsScreen">
+      <div class="session-info">
+        <span>👤 <strong id="claimsStaffName"></strong></span>
+        <a href="#" onclick="handleLogout(event)">Log out</a>
+      </div>
+
+      <h2 style="color: var(--navy);">File a Warranty Claim</h2>
+
+      <form id="claimsForm" onsubmit="handleClaimSubmit(event)">
+        <label for="claimSerial">Battery Serial Number *</label>
+        <input type="text" id="claimSerial" placeholder="e.g., BD12345" required />
+        <div class="hint">The serial number of the battery being claimed.</div>
+
+        <label for="claimType" style="margin-top: 14px;">Claim Type *</label>
+        <select id="claimType" required>
+          <option value="">-- Select --</option>
+          <option>Return/Refund</option>
+          <option>Warranty Replacement</option>
+          <option>Defect Found</option>
+          <option>Performance Issue</option>
+          <option>Other</option>
+        </select>
+
+        <label for="claimDate" style="margin-top: 14px;">Claim Date *</label>
+        <input type="date" id="claimDate" required />
+        <div class="hint">When the issue was discovered.</div>
+
+        <label for="claimNotes" style="margin-top: 14px;">Details (optional)</label>
+        <textarea id="claimNotes" placeholder="Describe the issue..." style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; font-family: inherit; min-height: 80px; resize: none;"></textarea>
+
+        <button type="submit" style="margin-top: 20px;">✓ Submit Claim</button>
+      </form>
+
+      <div id="claimsStatus"></div>
+    </div>
+  </main>
+
+  <footer style="text-align: center; font-size: 12px; color: #999;">
+    v1.0 — Battery Registration System
+  </footer>
 </div>
 
-<!-- Entry form — hidden until login succeeds -->
-<div id="entryScreen" style="display:none;">
-  <p style="font-size:14px; color:#555;">Logged in as <strong id="loggedInName"></strong> — <a href="#" id="logoutLink">log out</a></p>
-
-  <video id="preview" autoplay playsinline muted></video>
-  <button id="scanBtn" type="button">Start Camera Scan</button>
-
-  <label for="serial">Serial Number</label>
-  <input type="text" id="serial" placeholder="Scan above, or type manually" />
-
-  <label for="brand">Brand</label>
-  <select id="brand">
-    <option>Exide</option>
-    <option>Amara Raja</option>
-    <option>Luminous</option>
-    <option>Other</option>
-  </select>
-
-  <label for="type">Type</label>
-  <select id="type">
-    <option>Automotive</option>
-    <option>Inverter</option>
-    <option>UPS</option>
-  </select>
-
-  <label for="capacity">Capacity</label>
-  <input type="text" id="capacity" placeholder="e.g. 35Ah" />
-
-  <label for="purchaseDate">Purchase Date</label>
-  <input type="date" id="purchaseDate" />
-
-  <label for="photo">Photo (serial number + bill)</label>
-  <input type="file" id="photo" accept="image/*" capture="environment" />
-
-  <button id="submitBtn" type="button">Submit Entry</button>
-
-  <div id="pendingBanner" style="display:none; margin-top:14px; padding:10px; background:#FFF3CD; color:#664D03; border-radius:6px; font-size:14px;">
-    <span id="pendingCount"></span>
-    <button id="retryBtn" type="button" style="margin-top:8px; background:#664D03;">Try Uploading Now</button>
-  </div>
-</div>
-
-<div id="status"></div>
-
 <script>
-function showStatus(msg, isError) {
-  const el = document.getElementById('status');
-  el.textContent = msg;
-  el.className = isError ? 'err' : 'ok';
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+
+// Replace this with your Apps Script Web App deployment URL before use
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz7zauve4MmbqIqvMTssQmg8pBpYS_u_6mKAhc7WyyjLZz9cTSCWxcP2SBmnrPGo6S5Jg/exec';
+
+// How long to wait for a submission before treating it as a network timeout
+const QUEUE_TIMEOUT_MS = 8000;
+
+// ============================================================================
+// GLOBAL STATE
+// ============================================================================
+
+let sessionToken = null;
+let sessionStaffName = null;
+let cameraStream = null;
+
+// Restore session from sessionStorage if available
+function restoreSession() {
+  const token = sessionStorage.getItem('battery_token');
+  const name = sessionStorage.getItem('battery_staff_name');
+  if (token && name) {
+    sessionToken = token;
+    sessionStaffName = name;
+    showEntryScreen();
+  } else {
+    showLoginScreen();
+  }
 }
 
-// ---- Offline queue: capture now, upload later if the network is weak/down ----
-// Entries that fail or time out get saved locally (IndexedDB, since a photo's
-// base64 data is too large for localStorage) and retried automatically once
-// the connection is back, or when the staff member taps "Try Uploading Now".
+function showLoginScreen() {
+  document.getElementById('loginScreen').classList.add('active');
+  document.getElementById('entryScreen').classList.remove('active');
+  document.getElementById('staffPin').value = '';
+}
 
-const QUEUE_TIMEOUT_MS = 8000; // how long to wait before treating a submission as failed
+function showEntryScreen() {
+  document.getElementById('loginScreen').classList.remove('active');
+  document.getElementById('entryScreen').classList.add('active');
+  document.getElementById('loggedInName').textContent = sessionStaffName;
+  updatePendingBanner();
+  flushQueue(); // Auto-retry any queued entries
+}
+
+// ============================================================================
+// LOGIN HANDLER
+// ============================================================================
+
+function handleLogin(evt) {
+  evt.preventDefault();
+  const name = document.getElementById('staffName').value.trim();
+  const pin = document.getElementById('staffPin').value.trim();
+
+  if (!name || !pin) {
+    showStatus('Enter your name and PIN.', 'err', 'loginScreen');
+    return;
+  }
+
+  if (APPS_SCRIPT_URL.includes('PASTE_YOUR')) {
+    showStatus('⚠ APPS_SCRIPT_URL not configured. Contact your administrator.', 'err', 'loginScreen');
+    return;
+  }
+
+  showStatus('Logging in…', 'ok', 'loginScreen');
+
+  const callbackName = 'login_' + Date.now();
+  window[callbackName] = function(response) {
+    delete window[callbackName];
+    const script = document.querySelector('script[src*="' + callbackName + '"]');
+    if (script) script.remove();
+
+    if (response.success) {
+      sessionToken = response.token;
+      sessionStaffName = response.staffName;
+      sessionStorage.setItem('battery_token', sessionToken);
+      sessionStorage.setItem('battery_staff_name', sessionStaffName);
+      showStatus('', '', 'loginScreen');
+      showEntryScreen();
+    } else if (response.error === 'invalid_credentials') {
+      showStatus('❌ Name or PIN not recognized. Check with your manager.', 'err', 'loginScreen');
+    } else if (response.error === 'inactive_staff') {
+      showStatus('❌ This staff account is inactive.', 'err', 'loginScreen');
+    } else {
+      showStatus('❌ Login failed: ' + (response.message || response.error), 'err', 'loginScreen');
+    }
+  };
+
+  const params = new URLSearchParams({ action: 'login', name, pin, callback: callbackName });
+  const script = document.createElement('script');
+  script.src = APPS_SCRIPT_URL + '?' + params.toString();
+  script.onerror = () => {
+    showStatus('❌ Network error. Check your connection.', 'err', 'loginScreen');
+    delete window[callbackName];
+  };
+  document.body.appendChild(script);
+}
+
+function handleLogout(evt) {
+  evt.preventDefault();
+  sessionStorage.removeItem('battery_token');
+  sessionStorage.removeItem('battery_staff_name');
+  sessionToken = null;
+  sessionStaffName = null;
+  showLoginScreen();
+}
+
+// ============================================================================
+// CAMERA SCANNING
+// ============================================================================
+
+document.getElementById('scanBtn').addEventListener('click', async () => {
+  const video = document.getElementById('preview');
+  try {
+    // Request camera access
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' }
+    });
+    video.srcObject = cameraStream;
+
+    // Check if BarcodeDetector is available
+    if (!('BarcodeDetector' in window)) {
+      showStatus('⚠ Your browser doesn\'t support barcode scanning. Type the serial manually.', 'warn', 'entryScreen');
+      return;
+    }
+
+    showStatus('📸 Camera active — point at the serial/barcode', 'ok', 'entryScreen');
+
+    const detector = new BarcodeDetector();
+    const scanLoop = async () => {
+      if (!cameraStream) return;
+      try {
+        const barcodes = await detector.detect(video);
+        if (barcodes.length > 0) {
+          const serial = barcodes[0].rawValue.trim();
+          document.getElementById('serial').value = serial;
+          showStatus('✓ Scanned: ' + serial, 'ok', 'entryScreen');
+          cameraStream.getTracks().forEach(t => t.stop());
+          cameraStream = null;
+          return;
+        }
+      } catch (e) {
+        /* keep scanning */
+      }
+      requestAnimationFrame(scanLoop);
+    };
+    scanLoop();
+  } catch (e) {
+    showStatus('❌ Camera access failed: ' + e.message, 'err', 'entryScreen');
+  }
+});
+
+// ============================================================================
+// SUBMISSION HANDLER
+// ============================================================================
+
+function handleSubmit(evt) {
+  evt.preventDefault();
+
+  const serial = document.getElementById('serial').value.trim();
+  if (!serial) {
+    showStatus('Serial number is required.', 'err', 'entryScreen');
+    return;
+  }
+
+  if (!sessionToken) {
+    showStatus('❌ Session expired. Please log in again.', 'err', 'entryScreen');
+    return;
+  }
+
+  if (APPS_SCRIPT_URL.includes('PASTE_YOUR')) {
+    showStatus('⚠ APPS_SCRIPT_URL not configured.', 'err', 'entryScreen');
+    return;
+  }
+
+  const brand = document.getElementById('brand').value;
+  const type = document.getElementById('type').value;
+  const purchaseDate = document.getElementById('purchaseDate').value;
+  const photoFile = document.getElementById('photo').files[0];
+
+  showStatus('📤 Submitting…', 'ok', 'entryScreen');
+
+  (async () => {
+    let photoBase64 = null;
+    let photoMimeType = null;
+
+    if (photoFile) {
+      try {
+        photoBase64 = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result.split(',')[1]);
+          reader.readAsDataURL(photoFile);
+        });
+        photoMimeType = photoFile.type;
+      } catch (e) {
+        showStatus('❌ Failed to read photo: ' + e.message, 'err', 'entryScreen');
+        return;
+      }
+    }
+
+    const item = {
+      serial, brand, type, purchaseDate,
+      token: sessionToken,
+      staffName: sessionStaffName,
+      photoBase64, photoMimeType
+    };
+
+    try {
+      const response = await jsonpRequest(item);
+
+      if (response.success) {
+        showStatus('✓ Entry saved to row ' + response.row, 'ok', 'entryScreen');
+
+        if (photoBase64) {
+          const photoOk = await postPhoto(serial, photoMimeType, photoBase64, sessionToken).catch(() => false);
+          if (photoOk) {
+            showStatus('✓ Entry + photo saved successfully!', 'ok', 'entryScreen');
+          } else {
+            // Text succeeded but photo failed — queue the photo for retry
+            await queueAdd({ ...item, photoOnly: true });
+            showStatus('✓ Entry saved. Photo will upload when connection improves.', 'warn', 'entryScreen');
+            updatePendingBanner();
+          }
+        }
+
+        // Clear the form
+        document.getElementById('entryForm').reset();
+      } else if (response.error === 'duplicate_serial') {
+        showStatus('⚠ This serial is already registered (row ' + response.existingRow + '). Choose a different battery.', 'err', 'entryScreen');
+      } else if (response.error === 'not_logged_in') {
+        showStatus('❌ Session expired. Please log in again.', 'err', 'entryScreen');
+        handleLogout({ preventDefault: () => {} });
+      } else {
+        showStatus('❌ Save failed: ' + (response.message || response.error), 'err', 'entryScreen');
+      }
+    } catch (err) {
+      // Network timeout or offline — queue the entry for automatic retry
+      await queueAdd(item);
+      showStatus('⚠ Network is weak. Entry saved on this phone and will upload automatically when connection improves.', 'warn', 'entryScreen');
+      updatePendingBanner();
+    }
+  })();
+}
+
+// ============================================================================
+// OFFLINE QUEUE (INDEXEDDB)
+// ============================================================================
 
 function openQueueDB() {
   return new Promise((resolve, reject) => {
@@ -140,44 +613,47 @@ async function updatePendingBanner() {
   const banner = document.getElementById('pendingBanner');
   if (items.length > 0) {
     document.getElementById('pendingCount').textContent =
-      items.length + ' entr' + (items.length === 1 ? 'y' : 'ies') + ' saved locally, waiting to upload.';
-    banner.style.display = 'block';
+      items.length + ' entr' + (items.length === 1 ? 'y' : 'ies') + ' waiting to upload.';
+    banner.classList.add('show');
   } else {
-    banner.style.display = 'none';
+    banner.classList.remove('show');
   }
 }
 
-// Sends one queued item to the backend. Returns true on success, false if it should stay queued.
 async function sendQueuedItem(item) {
-  // Photo-only retries (the text entry already succeeded earlier) skip straight to the photo upload.
   if (item.photoOnly) {
-    const photoOk = await sendPhotoPost(item.serial, item.photoMimeType, item.photoBase64, item.token).catch(() => false);
-    return photoOk;
+    // Photo-only retry
+    const ok = await postPhoto(item.serial, item.photoMimeType, item.photoBase64, item.token).catch(() => false);
+    return ok;
   }
 
-  const entryResult = await jsonpAddEntry(item).catch(() => null);
-  if (!entryResult) return false; // network still down or timed out
+  const response = await jsonpRequest(item).catch(() => null);
+  if (!response) return false;
 
-  if (entryResult.error === 'duplicate') {
-    // Already registered under a different sync — drop it from the queue rather than looping forever.
-    showStatus('A queued entry (serial ' + item.serial + ') was already registered elsewhere — removed from queue.', true);
+  if (response.error === 'duplicate_serial') {
+    // Already registered elsewhere — discard from queue
+    showStatus('A queued entry (serial ' + item.serial + ') is already registered. Removed from queue.', 'warn', 'entryScreen');
     return true;
   }
-  if (entryResult.error === 'not_logged_in') {
-    // The session that created this entry has expired. Don't discard real data —
-    // keep it queued and ask the original staff member to log back in.
-    showStatus('Entry for serial ' + item.serial + ' needs ' + (item.staffName || 'the original staff member') + ' to log in again to finish saving.', true);
+
+  if (response.error === 'not_logged_in') {
+    // Staff needs to re-login to complete this entry
+    showStatus('Entry ' + item.serial + ' needs ' + item.staffName + ' to log in to finish.', 'warn', 'entryScreen');
     return false;
   }
-  if (!entryResult.success) {
-    // Some other real rejection — surface it, but still don't silently discard the data.
-    showStatus('A queued entry (serial ' + item.serial + ') is stuck: ' + (entryResult.message || entryResult.error), true);
+
+  if (!response.success) {
+    // Other error — keep in queue
+    showStatus('Queued entry stuck: ' + (response.message || response.error), 'warn', 'entryScreen');
     return false;
   }
+
+  // Text succeeded — now try the photo if present
   if (item.photoBase64) {
-    const photoOk = await sendPhotoPost(item.serial, item.photoMimeType, item.photoBase64, item.token).catch(() => false);
-    if (!photoOk) return false; // keep in queue, retry photo next time
+    const photoOk = await postPhoto(item.serial, item.photoMimeType, item.photoBase64, item.token).catch(() => false);
+    if (!photoOk) return false; // Keep in queue, retry photo next time
   }
+
   return true;
 }
 
@@ -190,111 +666,21 @@ async function flushQueue() {
   await updatePendingBanner();
 }
 
+// Auto-flush queue when connection returns or "Try Now" clicked
 window.addEventListener('online', flushQueue);
 document.getElementById('retryBtn').addEventListener('click', flushQueue);
-window.addEventListener('load', () => { updatePendingBanner(); flushQueue(); });
-
-// ---- Login ----
-// Uses sessionStorage so staff stay logged in for the browser tab's session,
-// but a new tab/device requires logging in again.
-let sessionToken = sessionStorage.getItem('battery_token');
-let sessionStaffName = sessionStorage.getItem('battery_staff_name');
-
-function showEntryScreen() {
-  document.getElementById('loginScreen').style.display = 'none';
-  document.getElementById('entryScreen').style.display = 'block';
-  document.getElementById('loggedInName').textContent = sessionStaffName;
-}
-
-if (sessionToken && sessionStaffName) {
-  showEntryScreen();
-}
-
-document.getElementById('loginBtn').addEventListener('click', () => {
-  const name = document.getElementById('staffName').value.trim();
-  const pin = document.getElementById('staffPin').value.trim();
-  if (!name || !pin) { showStatus('Enter your name and PIN.', true); return; }
-  if (APPS_SCRIPT_URL.includes('PASTE_YOUR')) { showStatus('Set APPS_SCRIPT_URL at the top of this file first.', true); return; }
-
-  const callbackName = 'loginCallback_' + Date.now();
-  window[callbackName] = function(response) {
-    if (response.success) {
-      sessionToken = response.token;
-      sessionStaffName = response.staffName;
-      sessionStorage.setItem('battery_token', sessionToken);
-      sessionStorage.setItem('battery_staff_name', sessionStaffName);
-      showStatus('', false);
-      document.getElementById('status').className = '';
-      showEntryScreen();
-    } else if (response.error === 'invalid_credentials') {
-      showStatus('Name or PIN not recognized. Check with your manager.', true);
-    } else if (response.error === 'inactive_staff') {
-      showStatus('This staff account is inactive.', true);
-    } else {
-      showStatus('Login failed: ' + (response.message || response.error), true);
-    }
-    delete window[callbackName];
-    document.body.removeChild(script);
-  };
-
-  const params = new URLSearchParams({ action: 'login', name, pin, callback: callbackName });
-  const script = document.createElement('script');
-  script.src = APPS_SCRIPT_URL + '?' + params.toString();
-  document.body.appendChild(script);
+window.addEventListener('load', async () => {
+  restoreSession();
+  await flushQueue();
 });
 
-document.getElementById('logoutLink').addEventListener('click', (evt) => {
-  evt.preventDefault();
-  sessionStorage.removeItem('battery_token');
-  sessionStorage.removeItem('battery_staff_name');
-  sessionToken = null;
-  sessionStaffName = null;
-  document.getElementById('entryScreen').style.display = 'none';
-  document.getElementById('loginScreen').style.display = 'block';
-  document.getElementById('staffPin').value = '';
-});
+// ============================================================================
+// NETWORK REQUESTS
+// ============================================================================
 
-// ---- Camera-based barcode scanning ----
-// Uses the browser's built-in BarcodeDetector where available.
-// This page must be hosted externally (not inside Apps Script's own web app
-// sandbox) for camera access to work reliably on mobile browsers.
-let stream;
-document.getElementById('scanBtn').addEventListener('click', async () => {
-  const video = document.getElementById('preview');
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-    video.srcObject = stream;
-
-    if (!('BarcodeDetector' in window)) {
-      showStatus('BarcodeDetector not supported on this browser — type the serial manually instead.', true);
-      return;
-    }
-
-    const detector = new BarcodeDetector();
-    const scanLoop = async () => {
-      if (!stream) return;
-      try {
-        const barcodes = await detector.detect(video);
-        if (barcodes.length > 0) {
-          document.getElementById('serial').value = barcodes[0].rawValue;
-          showStatus('Scanned: ' + barcodes[0].rawValue, false);
-          stream.getTracks().forEach(t => t.stop());
-          stream = null;
-          return;
-        }
-      } catch (e) { /* keep trying */ }
-      requestAnimationFrame(scanLoop);
-    };
-    scanLoop();
-  } catch (e) {
-    showStatus('Camera access failed: ' + e.message, true);
-  }
-});
-
-// ---- JSONP helper with a timeout, so a weak/dead connection doesn't hang forever ----
-function jsonpAddEntry(item) {
+function jsonpRequest(item) {
   return new Promise((resolve, reject) => {
-    const callbackName = 'jsonpCallback_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
+    const callbackName = 'jsonp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
     let settled = false;
 
     const timeoutId = setTimeout(() => {
@@ -307,7 +693,8 @@ function jsonpAddEntry(item) {
     function cleanup() {
       clearTimeout(timeoutId);
       delete window[callbackName];
-      if (script.parentNode) document.body.removeChild(script);
+      const script = document.querySelector('script[src*="' + callbackName + '"]');
+      if (script) script.remove();
     }
 
     window[callbackName] = function(response) {
@@ -318,97 +705,189 @@ function jsonpAddEntry(item) {
     };
 
     const params = new URLSearchParams({
-      action: 'addEntry', serial: item.serial, brand: item.brand, type: item.type,
-      capacity: item.capacity, purchaseDate: item.purchaseDate, token: item.token, callback: callbackName
+      action: 'addEntry',
+      serial: item.serial,
+      brand: item.brand,
+      type: item.type,
+      purchaseDate: item.purchaseDate,
+      token: item.token,
+      callback: callbackName
     });
+
     const script = document.createElement('script');
+    script.src = APPS_SCRIPT_URL + '?' + params.toString();
     script.onerror = () => {
       if (settled) return;
       settled = true;
       cleanup();
       reject(new Error('network_error'));
     };
-    script.src = APPS_SCRIPT_URL + '?' + params.toString();
     document.body.appendChild(script);
   });
 }
 
-// ---- POST helper with a timeout, for the photo upload path ----
-function sendPhotoPost(serial, mimeType, base64Data, token) {
+function postPhoto(serial, mimeType, base64Data, token) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), QUEUE_TIMEOUT_MS);
 
   return fetch(APPS_SCRIPT_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids CORS preflight
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({ action: 'uploadPhoto', serial, mimeType, base64Data, token }),
     signal: controller.signal
   })
-  .then(res => res.json())
-  .then(data => { clearTimeout(timeoutId); return !!data.success; })
-  .catch(() => { clearTimeout(timeoutId); return false; });
+    .then(res => res.json())
+    .then(data => {
+      clearTimeout(timeoutId);
+      return !!data.success;
+    })
+    .catch(() => {
+      clearTimeout(timeoutId);
+      return false;
+    });
 }
 
-// ---- Submit: try immediately; if the network is weak/down, queue for automatic retry ----
-document.getElementById('submitBtn').addEventListener('click', async () => {
-  const serial = document.getElementById('serial').value.trim();
-  const brand = document.getElementById('brand').value;
-  const type = document.getElementById('type').value;
-  const capacity = document.getElementById('capacity').value.trim();
-  const purchaseDate = document.getElementById('purchaseDate').value;
-  const photoFile = document.getElementById('photo').files[0];
+// ============================================================================
+// UI HELPERS
+// ============================================================================
 
-  if (!serial) { showStatus('Serial number is required.', true); return; }
-  if (!sessionToken) { showStatus('You have been logged out — please log in again.', true); return; }
-  if (APPS_SCRIPT_URL.includes('PASTE_YOUR')) { showStatus('Set APPS_SCRIPT_URL at the top of this file first.', true); return; }
+function showStatus(msg, level, screen) {
+  const statusEl = document.querySelector('#' + screen + ' #status');
+  if (!statusEl) return;
 
-  showStatus('Sending…', false);
+  statusEl.textContent = msg;
+  statusEl.className = level;
+  if (!msg) statusEl.style.display = 'none';
+}
 
-  let photoBase64 = null, photoMimeType = null;
-  if (photoFile) {
-    photoBase64 = await new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result.split(',')[1]);
-      reader.readAsDataURL(photoFile);
-    });
-    photoMimeType = photoFile.type;
+// ============================================================================
+// MODE SWITCHING (Register vs. File Claim)
+// ============================================================================
+
+let currentMode = 'register'; // or 'claim'
+
+function switchMode(mode) {
+  currentMode = mode;
+
+  // Update header
+  const titleEl = document.getElementById('headerTitle');
+  const subtitleEl = document.getElementById('headerSubtitle');
+  
+  if (mode === 'register') {
+    titleEl.textContent = '📷 Battery Registration';
+    subtitleEl.textContent = 'Scan, capture, and register a new battery';
+    document.getElementById('entryScreen').classList.add('active');
+    document.getElementById('claimsScreen').classList.remove('active');
+    document.getElementById('modeRegister').classList.add('active');
+    document.getElementById('modeClaim').classList.remove('active');
+  } else {
+    titleEl.textContent = '📋 File a Warranty Claim';
+    subtitleEl.textContent = 'Log a return, replacement, or defect';
+    document.getElementById('entryScreen').classList.remove('active');
+    document.getElementById('claimsScreen').classList.add('active');
+    document.getElementById('modeRegister').classList.remove('active');
+    document.getElementById('modeClaim').classList.add('active');
+    document.getElementById('claimsStaffName').textContent = sessionStaffName;
+    // Pre-fill claim date to today
+    document.getElementById('claimDate').valueAsDate = new Date();
   }
+}
 
-  const item = { serial, brand, type, capacity, purchaseDate, token: sessionToken, staffName: sessionStaffName, photoBase64, photoMimeType };
-
-  try {
-    const response = await jsonpAddEntry(item);
-    if (response.success) {
-      showStatus('Entry saved. Row: ' + response.row, false);
-      if (photoBase64) {
-        const photoOk = await sendPhotoPost(serial, photoMimeType, photoBase64, sessionToken);
-        if (photoOk) {
-          showStatus('Entry + photo saved.', false);
-        } else {
-          // Text entry succeeded but photo didn't — queue just the photo step for retry.
-          await queueAdd({ serial, brand: '', type: '', capacity: '', purchaseDate: '', token: sessionToken, staffName: sessionStaffName, photoBase64, photoMimeType, photoOnly: true });
-          showStatus('Entry saved. Photo upload is weak right now — it will retry automatically.', true);
-          updatePendingBanner();
-        }
-      }
-    } else if (response.error === 'duplicate') {
-      showStatus('⚠ Already registered — ' + response.message, true);
-    } else if (response.error === 'not_logged_in') {
-      showStatus('Session expired — please log in again.', true);
-      sessionStorage.removeItem('battery_token');
-      sessionStorage.removeItem('battery_staff_name');
-      document.getElementById('entryScreen').style.display = 'none';
-      document.getElementById('loginScreen').style.display = 'block';
-    } else {
-      showStatus('Save failed: ' + (response.message || response.error), true);
-    }
-  } catch (err) {
-    // Network too weak / down entirely — queue the whole entry (text + photo) for automatic retry.
-    await queueAdd(item);
-    showStatus('⚠ Network is weak. Entry saved on this phone — it will upload automatically once connected.', true);
-    updatePendingBanner();
-  }
+document.getElementById('modeRegister').addEventListener('click', (e) => {
+  e.preventDefault();
+  switchMode('register');
 });
+
+document.getElementById('modeClaim').addEventListener('click', (e) => {
+  e.preventDefault();
+  switchMode('claim');
+});
+
+// ============================================================================
+// CLAIMS FORM SUBMISSION
+// ============================================================================
+
+function handleClaimSubmit(evt) {
+  evt.preventDefault();
+
+  const serial = document.getElementById('claimSerial').value.trim();
+  const claimType = document.getElementById('claimType').value;
+  const claimDate = document.getElementById('claimDate').value;
+  const notes = document.getElementById('claimNotes').value.trim();
+
+  if (!serial || !claimType || !claimDate) {
+    showStatus('Fill in all required fields (marked with *).', 'err', 'claimsScreen');
+    return;
+  }
+
+  if (!sessionToken) {
+    showStatus('❌ Session expired. Please log in again.', 'err', 'claimsScreen');
+    return;
+  }
+
+  if (APPS_SCRIPT_URL.includes('PASTE_YOUR')) {
+    showStatus('⚠ APPS_SCRIPT_URL not configured.', 'err', 'claimsScreen');
+    return;
+  }
+
+  showStatus('📤 Submitting claim…', 'ok', 'claimsScreen');
+
+  const callbackName = 'jsonp_claim_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+  let settled = false;
+
+  const timeoutId = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    showStatus('❌ Network timeout. Please try again.', 'err', 'claimsScreen');
+  }, QUEUE_TIMEOUT_MS);
+
+  function cleanup() {
+    clearTimeout(timeoutId);
+    delete window[callbackName];
+    const script = document.querySelector('script[src*="' + callbackName + '"]');
+    if (script) script.remove();
+  }
+
+  window[callbackName] = function(response) {
+    if (settled) return;
+    settled = true;
+    cleanup();
+
+    if (response.success) {
+      showStatus('✓ Claim submitted (row ' + response.row + '). Thank you.', 'ok', 'claimsScreen');
+      document.getElementById('claimsForm').reset();
+      document.getElementById('claimDate').valueAsDate = new Date();
+    } else if (response.error === 'serial_not_found') {
+      showStatus('❌ Serial not found in records. Check the number and try again.', 'err', 'claimsScreen');
+    } else if (response.error === 'not_logged_in') {
+      showStatus('❌ Session expired. Please log in again.', 'err', 'claimsScreen');
+      handleLogout({ preventDefault: () => {} });
+    } else {
+      showStatus('❌ Submission failed: ' + (response.message || response.error), 'err', 'claimsScreen');
+    }
+  };
+
+  const params = new URLSearchParams({
+    action: 'addClaim',
+    serial,
+    claimType,
+    claimDate,
+    notes,
+    token: sessionToken,
+    callback: callbackName
+  });
+
+  const script = document.createElement('script');
+  script.src = APPS_SCRIPT_URL + '?' + params.toString();
+  script.onerror = () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    showStatus('❌ Network error. Check your connection.', 'err', 'claimsScreen');
+  };
+  document.body.appendChild(script);
+}
 </script>
 
 </body>
