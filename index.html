@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Battery Scanner POC</title>
+<style>
+  body { font-family: -apple-system, Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; color: #1F4E79; }
+  video { width: 100%; border-radius: 8px; background: #000; }
+  label { display: block; margin-top: 14px; font-weight: bold; font-size: 14px; }
+  input, select { width: 100%; padding: 8px; margin-top: 4px; font-size: 16px; box-sizing: border-box; }
+  button { width: 100%; padding: 12px; margin-top: 16px; font-size: 16px; background: #1F4E79; color: white; border: none; border-radius: 6px; }
+  #status { margin-top: 12px; padding: 10px; border-radius: 6px; font-size: 14px; display: none; }
+  .ok { background: #D6F0D6; color: #1F5C1F; display: block !important; }
+  .err { background: #F0D6D6; color: #5C1F1F; display: block !important; }
+</style>
+</head>
+<body>
+
+<h1>Battery Entry — Feasibility POC</h1>
+
+<!-- CONFIG: replace with your Apps Script Web App deployment URL -->
+<script>
+  const APPS_SCRIPT_URL = "PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
+</script>
+
+<!-- Login screen — shown until staff successfully signs in -->
+<div id="loginScreen">
+  <label for="staffName">Your Name</label>
+  <input type="text" id="staffName" placeholder="e.g. Ramesh" />
+
+  <label for="staffPin">PIN</label>
+  <input type="password" id="staffPin" inputmode="numeric" placeholder="4-digit PIN" />
+
+  <button id="loginBtn" type="button">Log In</button>
+</div>
+
+<!-- Entry form — hidden until login succeeds -->
+<div id="entryScreen" style="display:none;">
+  <p style="font-size:14px; color:#555;">Logged in as <strong id="loggedInName"></strong> — <a href="#" id="logoutLink">log out</a></p>
+
+  <video id="preview" autoplay playsinline muted></video>
+  <button id="scanBtn" type="button">Start Camera Scan</button>
+
+  <label for="serial">Serial Number</label>
+  <input type="text" id="serial" placeholder="Scan above, or type manually" />
+
+  <label for="brand">Brand</label>
+  <select id="brand">
+    <option>Exide</option>
+    <option>Amara Raja</option>
+    <option>Luminous</option>
+    <option>Other</option>
+  </select>
+
+  <label for="type">Type</label>
+  <select id="type">
+    <option>Automotive</option>
+    <option>Inverter</option>
+    <option>UPS</option>
+  </select>
+
+  <label for="purchaseDate">Purchase Date</label>
+  <input type="date" id="purchaseDate" />
+
+  <label for="photo">Photo (serial number + bill)</label>
+  <input type="file" id="photo" accept="image/*" capture="environment" />
+
+  <button id="submitBtn" type="button">Submit Entry</button>
+
+  <div id="pendingBanner" style="display:none; margin-top:14px; padding:10px; background:#FFF3CD; color:#664D03; border-radius:6px; font-size:14px;">
+    <span id="pendingCount"></span>
+    <button id="retryBtn" type="button" style="margin-top:8px; background:#664D03;">Try Uploading Now</button>
+  </div>
+</div>
+
+<div id="status"></div>
+
+<script>
+function showStatus(msg, isError) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = isError ? 'err' : 'ok';
+}
+
+// ---- Offline queue: capture now, upload later if the network is weak/down ----
+// Entries that fail or time out get saved locally (IndexedDB, since a photo's
+// base64 data is too large for localStorage) and retried automatically once
+// the connection is back, or when the staff member taps "Try Uploading Now".
+
+const QUEUE_TIMEOUT_MS = 8000; // how long to wait before treating a submission as failed
+
+function openQueueDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('battery_queue_db', 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore('pending', { keyPath: 'id', autoIncrement: true });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function queueAdd(item) {
+  const db = await openQueueDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('pending', 'readwrite');
+    tx.objectStore('pending').add(item);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function queueGetAll() {
+  const db = await openQueueDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('pending', 'readonly');
+    const req = tx.objectStore('pending').getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function queueRemove(id) {
+  const db = await openQueueDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('pending', 'readwrite');
+    tx.objectStore('pending').delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function updatePendingBanner() {
+  const items = await queueGetAll();
+  const banner = document.getElementById('pendingBanner');
+  if (items.length > 0) {
+    document.getElementById('pendingCount').textContent =
+      items.length + ' entr' + (items.length === 1 ? 'y' : 'ies') + ' saved locally, waiting to upload.';
+    banner.style.display = 'block';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+// Sends one queued item to the backend. Returns true on success, false if it should stay queued.
+async function sendQueuedItem(item) {
+  // Photo-only retries (the text entry already succeeded earlier) skip straight to the photo upload.
+  if (item.photoOnly) {
+    const photoOk = await sendPhotoPost(item.serial, item.photoMimeType, item.photoBase64, item.token).catch(() => false);
+    return photoOk;
+  }
+
+  const entryResult = await jsonpAddEntry(item).catch(() => null);
+  if (!entryResult) return false; // network still down or timed out
+
+  if (entryResult.error === 'duplicate') {
+    // Already registered under a different sync — drop it from the queue rather than looping forever.
+    showStatus('A queued entry (serial ' + item.serial + ') was already registered elsewhere — removed from queue.', true);
+    return true;
+  }
+  if (entryResult.error === 'not_logged_in') {
+    // The session that created this entry has expired. Don't discard real data —
+    // keep it queued and ask the original staff member to log back in.
+    showStatus('Entry for serial ' + item.serial + ' needs ' + (item.staffName || 'the original staff member') + ' to log in again to finish saving.', true);
+    return false;
+  }
+  if (!entryResult.success) {
+    // Some other real rejection — surface it, but still don't silently discard the data.
+    showStatus('A queued entry (serial ' + item.serial + ') is stuck: ' + (entryResult.message || entryResult.error), true);
+    return false;
+  }
+  if (item.photoBase64) {
+    const photoOk = await sendPhotoPost(item.serial, item.photoMimeType, item.photoBase64, item.token).catch(() => false);
+    if (!photoOk) return false; // keep in queue, retry photo next time
+  }
+  return true;
+}
+
+async function flushQueue() {
+  const items = await queueGetAll();
+  for (const item of items) {
+    const done = await sendQueuedItem(item);
+    if (done) await queueRemove(item.id);
+  }
+  await updatePendingBanner();
+}
+
+window.addEventListener('online', flushQueue);
+document.getElementById('retryBtn').addEventListener('click', flushQueue);
+window.addEventListener('load', () => { updatePendingBanner(); flushQueue(); });
+
+// ---- Login ----
+// Uses sessionStorage so staff stay logged in for the browser tab's session,
+// but a new tab/device requires logging in again.
+let sessionToken = sessionStorage.getItem('battery_token');
+let sessionStaffName = sessionStorage.getItem('battery_staff_name');
+
+function showEntryScreen() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('entryScreen').style.display = 'block';
+  document.getElementById('loggedInName').textContent = sessionStaffName;
+}
+
+if (sessionToken && sessionStaffName) {
+  showEntryScreen();
+}
+
+document.getElementById('loginBtn').addEventListener('click', () => {
+  const name = document.getElementById('staffName').value.trim();
+  const pin = document.getElementById('staffPin').value.trim();
+  if (!name || !pin) { showStatus('Enter your name and PIN.', true); return; }
+  if (APPS_SCRIPT_URL.includes('PASTE_YOUR')) { showStatus('Set APPS_SCRIPT_URL at the top of this file first.', true); return; }
+
+  const callbackName = 'loginCallback_' + Date.now();
+  window[callbackName] = function(response) {
+    if (response.success) {
+      sessionToken = response.token;
+      sessionStaffName = response.staffName;
+      sessionStorage.setItem('battery_token', sessionToken);
+      sessionStorage.setItem('battery_staff_name', sessionStaffName);
+      showStatus('', false);
+      document.getElementById('status').className = '';
+      showEntryScreen();
+    } else if (response.error === 'invalid_credentials') {
+      showStatus('Name or PIN not recognized. Check with your manager.', true);
+    } else if (response.error === 'inactive_staff') {
+      showStatus('This staff account is inactive.', true);
+    } else {
+      showStatus('Login failed: ' + (response.message || response.error), true);
+    }
+    delete window[callbackName];
+    document.body.removeChild(script);
+  };
+
+  const params = new URLSearchParams({ action: 'login', name, pin, callback: callbackName });
+  const script = document.createElement('script');
+  script.src = APPS_SCRIPT_URL + '?' + params.toString();
+  document.body.appendChild(script);
+});
+
+document.getElementById('logoutLink').addEventListener('click', (evt) => {
+  evt.preventDefault();
+  sessionStorage.removeItem('battery_token');
+  sessionStorage.removeItem('battery_staff_name');
+  sessionToken = null;
+  sessionStaffName = null;
+  document.getElementById('entryScreen').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'block';
+  document.getElementById('staffPin').value = '';
+});
+
+// ---- Camera-based barcode scanning ----
+// Uses the browser's built-in BarcodeDetector where available.
+// This page must be hosted externally (not inside Apps Script's own web app
+// sandbox) for camera access to work reliably on mobile browsers.
+let stream;
+document.getElementById('scanBtn').addEventListener('click', async () => {
+  const video = document.getElementById('preview');
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    video.srcObject = stream;
+
+    if (!('BarcodeDetector' in window)) {
+      showStatus('BarcodeDetector not supported on this browser — type the serial manually instead.', true);
+      return;
+    }
+
+    const detector = new BarcodeDetector();
+    const scanLoop = async () => {
+      if (!stream) return;
+      try {
+        const barcodes = await detector.detect(video);
+        if (barcodes.length > 0) {
+          document.getElementById('serial').value = barcodes[0].rawValue;
+          showStatus('Scanned: ' + barcodes[0].rawValue, false);
+          stream.getTracks().forEach(t => t.stop());
+          stream = null;
+          return;
+        }
+      } catch (e) { /* keep trying */ }
+      requestAnimationFrame(scanLoop);
+    };
+    scanLoop();
+  } catch (e) {
+    showStatus('Camera access failed: ' + e.message, true);
+  }
+});
+
+// ---- JSONP helper with a timeout, so a weak/dead connection doesn't hang forever ----
+function jsonpAddEntry(item) {
+  return new Promise((resolve, reject) => {
+    const callbackName = 'jsonpCallback_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
+    let settled = false;
+
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('timeout'));
+    }, QUEUE_TIMEOUT_MS);
+
+    function cleanup() {
+      clearTimeout(timeoutId);
+      delete window[callbackName];
+      if (script.parentNode) document.body.removeChild(script);
+    }
+
+    window[callbackName] = function(response) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(response);
+    };
+
+    const params = new URLSearchParams({
+      action: 'addEntry', serial: item.serial, brand: item.brand, type: item.type,
+      purchaseDate: item.purchaseDate, token: item.token, callback: callbackName
+    });
+    const script = document.createElement('script');
+    script.onerror = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('network_error'));
+    };
+    script.src = APPS_SCRIPT_URL + '?' + params.toString();
+    document.body.appendChild(script);
+  });
+}
+
+// ---- POST helper with a timeout, for the photo upload path ----
+function sendPhotoPost(serial, mimeType, base64Data, token) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), QUEUE_TIMEOUT_MS);
+
+  return fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids CORS preflight
+    body: JSON.stringify({ action: 'uploadPhoto', serial, mimeType, base64Data, token }),
+    signal: controller.signal
+  })
+  .then(res => res.json())
+  .then(data => { clearTimeout(timeoutId); return !!data.success; })
+  .catch(() => { clearTimeout(timeoutId); return false; });
+}
+
+// ---- Submit: try immediately; if the network is weak/down, queue for automatic retry ----
+document.getElementById('submitBtn').addEventListener('click', async () => {
+  const serial = document.getElementById('serial').value.trim();
+  const brand = document.getElementById('brand').value;
+  const type = document.getElementById('type').value;
+  const purchaseDate = document.getElementById('purchaseDate').value;
+  const photoFile = document.getElementById('photo').files[0];
+
+  if (!serial) { showStatus('Serial number is required.', true); return; }
+  if (!sessionToken) { showStatus('You have been logged out — please log in again.', true); return; }
+  if (APPS_SCRIPT_URL.includes('PASTE_YOUR')) { showStatus('Set APPS_SCRIPT_URL at the top of this file first.', true); return; }
+
+  showStatus('Sending…', false);
+
+  let photoBase64 = null, photoMimeType = null;
+  if (photoFile) {
+    photoBase64 = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.readAsDataURL(photoFile);
+    });
+    photoMimeType = photoFile.type;
+  }
+
+  const item = { serial, brand, type, purchaseDate, token: sessionToken, staffName: sessionStaffName, photoBase64, photoMimeType };
+
+  try {
+    const response = await jsonpAddEntry(item);
+    if (response.success) {
+      showStatus('Entry saved. Row: ' + response.row, false);
+      if (photoBase64) {
+        const photoOk = await sendPhotoPost(serial, photoMimeType, photoBase64, sessionToken);
+        if (photoOk) {
+          showStatus('Entry + photo saved.', false);
+        } else {
+          // Text entry succeeded but photo didn't — queue just the photo step for retry.
+          await queueAdd({ serial, brand: '', type: '', purchaseDate: '', token: sessionToken, staffName: sessionStaffName, photoBase64, photoMimeType, photoOnly: true });
+          showStatus('Entry saved. Photo upload is weak right now — it will retry automatically.', true);
+          updatePendingBanner();
+        }
+      }
+    } else if (response.error === 'duplicate') {
+      showStatus('⚠ Already registered — ' + response.message, true);
+    } else if (response.error === 'not_logged_in') {
+      showStatus('Session expired — please log in again.', true);
+      sessionStorage.removeItem('battery_token');
+      sessionStorage.removeItem('battery_staff_name');
+      document.getElementById('entryScreen').style.display = 'none';
+      document.getElementById('loginScreen').style.display = 'block';
+    } else {
+      showStatus('Save failed: ' + (response.message || response.error), true);
+    }
+  } catch (err) {
+    // Network too weak / down entirely — queue the whole entry (text + photo) for automatic retry.
+    await queueAdd(item);
+    showStatus('⚠ Network is weak. Entry saved on this phone — it will upload automatically once connected.', true);
+    updatePendingBanner();
+  }
+});
+</script>
+
+</body>
+</html>
