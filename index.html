@@ -254,6 +254,9 @@
             <option>Other</option>
           </select>
 
+          <label for="capacity" style="margin-top: 14px;">Capacity</label>
+          <input type="text" id="capacity" placeholder="e.g., 35Ah" />
+
           <label for="purchaseDate" style="margin-top: 14px;">Purchase Date</label>
           <input type="date" id="purchaseDate" />
           <div class="hint">Used to calculate warranty end date.</div>
@@ -496,6 +499,7 @@ function handleSubmit(evt) {
 
   const brand = document.getElementById('brand').value;
   const type = document.getElementById('type').value;
+  const capacity = document.getElementById('capacity').value.trim();
   const purchaseDate = document.getElementById('purchaseDate').value;
   const photoFile = document.getElementById('photo').files[0];
 
@@ -520,7 +524,7 @@ function handleSubmit(evt) {
     }
 
     const item = {
-      serial, brand, type, purchaseDate,
+      serial, brand, type, capacity, purchaseDate,
       token: sessionToken,
       staffName: sessionStaffName,
       photoBase64, photoMimeType
@@ -709,6 +713,7 @@ function jsonpRequest(item) {
       serial: item.serial,
       brand: item.brand,
       type: item.type,
+      capacity: item.capacity || '',
       purchaseDate: item.purchaseDate,
       token: item.token,
       callback: callbackName
