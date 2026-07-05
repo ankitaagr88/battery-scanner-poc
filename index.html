@@ -283,10 +283,6 @@
           <input type="date" id="purchaseDate" />
           <div class="hint">Used to calculate warranty end date.</div>
 
-          <label for="photo" style="margin-top: 14px;">Photo (optional)</label>
-          <input type="file" id="photo" accept="image/*" capture="environment" />
-          <div class="hint">Serial number label + bill, for warranty records.</div>
-
           <button type="submit" style="margin-top: 20px;">✓ Submit Entry</button>
         </form>
       </div>
@@ -564,33 +560,14 @@ function handleSubmit(evt) {
   const type = document.getElementById('type').value;
   const capacity = document.getElementById('capacity').value.trim();
   const purchaseDate = document.getElementById('purchaseDate').value;
-  const photoFile = document.getElementById('photo').files[0];
 
   showStatus('📤 Submitting…', 'ok', 'entryScreen');
 
   (async () => {
-    let photoBase64 = null;
-    let photoMimeType = null;
-
-    if (photoFile) {
-      try {
-        // Downscale + recompress before upload — a raw phone camera photo
-        // can be several MB, which risks blowing past the 8-second upload
-        // timeout on real mobile data. This keeps typical uploads under a
-        // few hundred KB while the serial number stays legible.
-        photoBase64 = await compressImage(photoFile, 1600, 0.7);
-        photoMimeType = 'image/jpeg';
-      } catch (e) {
-        showStatus('❌ Failed to read photo: ' + e.message, 'err', 'entryScreen');
-        return;
-      }
-    }
-
     const item = {
       serial, brand, type, capacity, purchaseDate,
       token: sessionToken,
-      staffName: sessionStaffName,
-      photoBase64, photoMimeType
+      staffName: sessionStaffName
     };
 
     try {
@@ -598,18 +575,6 @@ function handleSubmit(evt) {
 
       if (response.success) {
         showStatus('✓ Entry saved to row ' + response.row, 'ok', 'entryScreen');
-
-        if (photoBase64) {
-          const photoOk = await postPhoto(serial, photoMimeType, photoBase64, sessionToken).catch(() => false);
-          if (photoOk) {
-            showStatus('✓ Entry + photo saved successfully!', 'ok', 'entryScreen');
-          } else {
-            // Text succeeded but photo failed — queue the photo for retry
-            await queueAdd({ ...item, photoOnly: true });
-            showStatus('✓ Entry saved. Photo will upload when connection improves.', 'warn', 'entryScreen');
-            updatePendingBanner();
-          }
-        }
 
         // Clear the form
         document.getElementById('entryForm').reset();
@@ -688,12 +653,6 @@ async function updatePendingBanner() {
 }
 
 async function sendQueuedItem(item) {
-  if (item.photoOnly) {
-    // Photo-only retry
-    const ok = await postPhoto(item.serial, item.photoMimeType, item.photoBase64, item.token).catch(() => false);
-    return ok;
-  }
-
   const response = await jsonpRequest(item).catch(() => null);
   if (!response) return false;
 
@@ -713,12 +672,6 @@ async function sendQueuedItem(item) {
     // Other error — keep in queue
     showStatus('Queued entry stuck: ' + (response.message || response.error), 'warn', 'entryScreen');
     return false;
-  }
-
-  // Text succeeded — now try the photo if present
-  if (item.photoBase64) {
-    const photoOk = await postPhoto(item.serial, item.photoMimeType, item.photoBase64, item.token).catch(() => false);
-    if (!photoOk) return false; // Keep in queue, retry photo next time
   }
 
   return true;
@@ -792,66 +745,6 @@ function jsonpRequest(item) {
     };
     document.body.appendChild(script);
   });
-}
-
-// Downscales an image file to at most maxDimension on its longest side and
-// re-encodes it as JPEG at the given quality, returning base64 (no data:
-// URL prefix). Keeps uploads small enough to finish within QUEUE_TIMEOUT_MS
-// even on weak mobile data.
-function compressImage(file, maxDimension, quality) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const objectUrl = URL.createObjectURL(file);
-
-    img.onload = () => {
-      URL.revokeObjectURL(objectUrl);
-
-      let { width, height } = img;
-      if (width > maxDimension || height > maxDimension) {
-        if (width >= height) {
-          height = Math.round(height * (maxDimension / width));
-          width = maxDimension;
-        } else {
-          width = Math.round(width * (maxDimension / height));
-          height = maxDimension;
-        }
-      }
-
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-
-      const dataUrl = canvas.toDataURL('image/jpeg', quality);
-      resolve(dataUrl.split(',')[1]);
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(new Error('Could not load the photo for compression.'));
-    };
-    img.src = objectUrl;
-  });
-}
-
-function postPhoto(serial, mimeType, base64Data, token) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), QUEUE_TIMEOUT_MS);
-
-  return fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'uploadPhoto', serial, mimeType, base64Data, token }),
-    signal: controller.signal
-  })
-    .then(res => res.json())
-    .then(data => {
-      clearTimeout(timeoutId);
-      return !!data.success;
-    })
-    .catch(() => {
-      clearTimeout(timeoutId);
-      return false;
-    });
 }
 
 // ============================================================================
