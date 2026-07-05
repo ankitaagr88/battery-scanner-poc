@@ -228,6 +228,15 @@
       <button id="scanBtn" type="button">📱 Start Camera Scan</button>
       <div class="hint">Point at the serial number label or barcode. Not working? Enter it manually below.</div>
 
+      <!-- Shown when a code is detected: freezes the frame and asks for confirmation before it's accepted -->
+      <div id="scanConfirm" style="display:none; margin-top:10px; padding:12px; background:#FFF3CD; border-radius:4px; border-left:4px solid #ff9800;">
+        <p style="margin:0 0 10px; font-size:14px; color:var(--warning-text);">Detected: <strong id="scanConfirmValue"></strong></p>
+        <div style="display:flex; gap:8px;">
+          <button type="button" id="scanConfirmYes" style="flex:1; margin-top:0;">✓ Use This</button>
+          <button type="button" id="scanConfirmNo" style="flex:1; margin-top:0; background:#888;">↻ Scan Again</button>
+        </div>
+      </div>
+
       <div style="margin-top: 20px; padding: 12px; background: #f9f9f9; border-radius: 4px; border-left: 4px solid var(--light-blue);">
         <form id="entryForm" onsubmit="handleSubmit(event)">
           <label for="serial">Serial Number *</label>
@@ -340,6 +349,8 @@ const QUEUE_TIMEOUT_MS = 8000;
 let sessionToken = null;
 let sessionStaffName = null;
 let cameraStream = null;
+let awaitingScanConfirm = false; // true while a detected code is frozen on screen, waiting for the user to accept/reject it
+let pendingScanValue = null;     // the code detected but not yet confirmed
 
 // Restore session from sessionStorage if available
 function restoreSession() {
@@ -436,6 +447,10 @@ function handleLogout(evt) {
 
 document.getElementById('scanBtn').addEventListener('click', async () => {
   const video = document.getElementById('preview');
+  // Reset in case a previous scan session was left mid-confirmation.
+  awaitingScanConfirm = false;
+  pendingScanValue = null;
+  document.getElementById('scanConfirm').style.display = 'none';
   try {
     // Request camera access
     cameraStream = await navigator.mediaDevices.getUserMedia({
@@ -461,19 +476,23 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
 
     const detector = new BarcodeDetector();
     const scanLoop = async () => {
-      if (!cameraStream) return;
-      try {
-        const barcodes = await detector.detect(video);
-        if (barcodes.length > 0) {
-          const serial = barcodes[0].rawValue.trim();
-          document.getElementById('serial').value = serial;
-          showStatus('✓ Scanned: ' + serial, 'ok', 'entryScreen');
-          cameraStream.getTracks().forEach(t => t.stop());
-          cameraStream = null;
-          return;
+      if (!cameraStream) return; // camera was stopped (confirmed) — stop looping for real
+      if (!awaitingScanConfirm) {
+        try {
+          const barcodes = await detector.detect(video);
+          if (barcodes.length > 0) {
+            pendingScanValue = barcodes[0].rawValue.trim();
+            awaitingScanConfirm = true;
+            // Freeze on the exact frame that was read, so there's something
+            // concrete to confirm instead of a code just silently applying.
+            video.pause();
+            document.getElementById('scanConfirmValue').textContent = pendingScanValue;
+            document.getElementById('scanConfirm').style.display = 'block';
+            showStatus('Detected a code — confirm below before it\'s applied', 'ok', 'entryScreen');
+          }
+        } catch (e) {
+          /* keep scanning */
         }
-      } catch (e) {
-        /* keep scanning */
       }
       requestAnimationFrame(scanLoop);
     };
@@ -481,6 +500,29 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
   } catch (e) {
     showStatus('❌ Camera access failed: ' + e.message, 'err', 'entryScreen');
   }
+});
+
+// Confirms the frozen, detected value: applies it to the form and shuts the camera down for real.
+document.getElementById('scanConfirmYes').addEventListener('click', () => {
+  document.getElementById('serial').value = pendingScanValue;
+  showStatus('✓ Serial set: ' + pendingScanValue, 'ok', 'entryScreen');
+  document.getElementById('scanConfirm').style.display = 'none';
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(t => t.stop());
+    cameraStream = null;
+  }
+  awaitingScanConfirm = false;
+  pendingScanValue = null;
+});
+
+// Rejects the frozen, detected value: resumes the live feed and keeps scanning.
+document.getElementById('scanConfirmNo').addEventListener('click', () => {
+  document.getElementById('scanConfirm').style.display = 'none';
+  awaitingScanConfirm = false;
+  pendingScanValue = null;
+  const video = document.getElementById('preview');
+  video.play().catch(() => {});
+  showStatus('📸 Camera active — point at the serial/barcode', 'ok', 'entryScreen');
 });
 
 // ============================================================================
